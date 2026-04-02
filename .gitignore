@@ -1,0 +1,88 @@
+# ─── Data (never push patient data) ──────────────────────────────────────────
+../data/
+data/
+*.dicom
+*.dcm
+*.csv
+!requirements.txt
+
+# ─── Model checkpoints (too large for git) ────────────────────────────────────
+saved_models/
+*.pt
+*.pth
+*.pkl
+*.cbm
+*.keras
+*.h5
+
+# ─── OOF predictions (derived from patient data) ──────────────────────────────
+oof_predictions/
+*.npy
+
+# ─── Submission files ─────────────────────────────────────────────────────────
+submissions/
+
+# ─── Saved TF datasets (from original pipeline) ───────────────────────────────
+train_ds*/
+val_ds*/
+test_ds*/
+
+# ─── Python ───────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+.Python
+*.egg
+*.egg-info/
+dist/
+build/
+eggs/
+parts/
+var/
+sdist/
+develop-eggs/
+.installed.cfg
+lib/
+lib64/
+
+# ─── Virtual environments ─────────────────────────────────────────────────────
+venv/
+env/
+ENV/
+.venv/
+.env
+
+# ─── Jupyter notebooks ────────────────────────────────────────────────────────
+.ipynb_checkpoints/
+*/.ipynb_checkpoints/*
+
+# ─── IDEs ─────────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# ─── Logs and outputs ─────────────────────────────────────────────────────────
+*.log
+logs/
+runs/
+tensorboard/
+wandb/
+
+# ─── Plots saved during training ──────────────────────────────────────────────
+# Keep plots committed if you want them visible in the repo.
+# Uncomment the line below to exclude them instead.
+# *.png
+
+# ─── Pickle files ─────────────────────────────────────────────────────────────
+*.df
+meta_train.df
+
+# ─── Misc ─────────────────────────────────────────────────────────────────────
+*.tmp
+*.bak
+.cache/
