@@ -1,14 +1,15 @@
 """
-dataset.py — PyTorch Dataset for DICOM chest X-ray images.
-Similar data avaiable on kaggle https://www.kaggle.com/datasets/paultimothymooney/chest-xray-pneumonia?select=chest_xray
+dataset.py — PyTorch Dataset for NIH ChestX-ray14 (Paper 1).
 
-Handles:
-- DICOM loading with VOI-LUT and monochrome correction (matching original pipeline)
-- Grayscale → 3-channel replication (timm/ViT models expect RGB)
-- Resize to IMG_SIZE × IMG_SIZE
-- Patient metadata extraction (age, sex) for CatBoost
-- Train / val / test splits via a simple factory function
- - torchvision augmentation pipelines for train vs eval
+Key differences from VinBigData pipeline:
+  - Images are PNG (1024×1024), not DICOM
+  - Labels come from Data_Entry_2017.csv, not separate label file
+  - Binary mapping: "No Finding" → 0, any disease → 1
+  - Metadata (age, sex) extracted directly from CSV — no DICOM parsing needed
+  - Split MUST be patient-level to prevent leakage across follow-up images
+    (same patient can appear in multiple images; naive image-level split
+     would put the same patient in both train and test)
+  - 3-fold OOF (reduced from 5 for compute efficiency on 112k images)
 """
 
 import os
@@ -17,76 +18,20 @@ import pandas as pd
 import torch
 from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
-import pydicom
-from pydicom.pixel_data_handlers.util import apply_voi_lut
 from PIL import Image
 from sklearn.model_selection import train_test_split, StratifiedKFold
 
 from config import (
-    TRAIN_DIR, TEST_DIR, DATA_CSV,
-    IMG_SIZE, BATCH_SIZE, NUM_WORKERS, SEED, N_FOLDS,
+    IMAGES_DIR, DATA_ENTRY_CSV,
+    IMG_SIZE, BATCH_SIZE, NUM_WORKERS,
+    SEED, N_FOLDS,
+    NO_FINDING_LABEL,
+    VAL_PATIENT_FRAC, TEST_PATIENT_FRAC,
 )
 
 
-# DICOM reading 
+# ─── torchvision transforms ───────────────────────────────────────────────────
 
-def read_dicom(path: str,
-               voi_lut: bool = True,
-               fix_monochrome: bool = True) -> np.ndarray:
-    """
-    Load a DICOM file and return a float32 numpy array in [0, 1].
-    Steps
-    1. Read file with pydicom.
-    2. Apply VOI-LUT if available (produces perceptually correct pixel values).
-    3. Fix MONOCHROME1 inversion (darker = higher value → invert so brighter = higher).
-    4. Normalise to [0, 1].
-    """
-    dicom = pydicom.dcmread(path)
-
-    if voi_lut:
-        data = apply_voi_lut(dicom.pixel_array, dicom)
-    else:
-        data = dicom.pixel_array.astype(np.float32)
-
-    if fix_monochrome and dicom.PhotometricInterpretation == "MONOCHROME1":
-        data = np.amax(data) - data
-
-    data = data.astype(np.float32)
-    data -= data.min()
-    max_val = data.max()
-    if max_val > 0:
-        data /= max_val
-
-    return data          # shape: (H, W), dtype float32, range [0, 1]
-
-
-def extract_metadata(dicom_path: str) -> dict:
-    """
-    Extract patient-level metadata from a DICOM file.
-    Returns a dict with keys: patient_age (int or NaN), patient_sex (str).
-    """
-    dicom = pydicom.dcmread(dicom_path)
-
-    #  Age 
-    age_raw = getattr(dicom, "PatientAge", "")
-    try:
-        # Format is typically '045Y'; strip leading zeros and 'Y'
-        age = int(str(age_raw).strip().rstrip("Y").lstrip("0") or "0")
-    except (ValueError, AttributeError):
-        age = float("nan")
-
-    #  Sex 
-    sex = str(getattr(dicom, "PatientSex", "")).strip().upper()
-    if sex not in ("M", "F"):
-        sex = "O"          # Other / unknown
-
-    return {"patient_age": age, "patient_sex": sex}
-
-
-#  torchvision transform factories 
-
-# ImageNet statistics are standard even for medical images fine-tuned from
-# ImageNet pretrained weights.
 IMAGENET_MEAN = [0.485, 0.456, 0.406]
 IMAGENET_STD  = [0.229, 0.224, 0.225]
 
@@ -97,7 +42,6 @@ def get_train_transforms(img_size: int = IMG_SIZE) -> transforms.Compose:
         transforms.RandomHorizontalFlip(p=0.5),
         transforms.RandomRotation(degrees=5),
         transforms.RandomAffine(degrees=0, translate=(0.05, 0.05)),
-        # Random contrast / brightness variation — medically plausible
         transforms.ColorJitter(brightness=0.15, contrast=0.15),
         transforms.ToTensor(),
         transforms.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
@@ -112,121 +56,247 @@ def get_eval_transforms(img_size: int = IMG_SIZE) -> transforms.Compose:
     ])
 
 
-#  Dataset ────────────────────────────────────────────────────────────────
+# ─── Label CSV loader ─────────────────────────────────────────────────────────
 
-class ChestXrayDataset(Dataset):
+def load_nih_csv(csv_path: str = DATA_ENTRY_CSV) -> pd.DataFrame:
     """
-    PyTorch Dataset for DICOM chest X-ray binary classification.
+    Load Data_Entry_2017.csv and return a clean DataFrame with:
+      - image_id      : filename (e.g. '00000001_000.png')
+      - patient_id    : integer patient identifier
+      - finding_labels: raw pipe-separated string (e.g. 'Atelectasis|Effusion')
+      - binary_label  : 0 = No Finding, 1 = any disease present
+      - patient_age   : integer age
+      - patient_sex   : encoded integer (M=0, F=1, other=2)
 
-    Parameters"
-    df : DataFrame with columns 'id' and optionally 'Finding'
-    data_dir: directory containing .dicom files
-    transform: torchvision transform to apply
-    has_labels: True for train/val; False for test set
-    cache: if True, cache loaded pixel arrays in memory after first load
-                  (saves repeated DICOM decode; use only if RAM allows)
+    Data_Entry_2017.csv columns:
+      Image Index, Finding Labels, Follow-up #,
+      Patient ID, Patient Age, Patient Gender,
+      View Position, OriginalImage[Width Height],
+      OriginalImagePixelSpacing[x y]
+    """
+    df = pd.read_csv(csv_path)
+
+    # Standardise column names
+    df = df.rename(columns={
+        "Image Index":     "image_id",
+        "Finding Labels":  "finding_labels",
+        "Patient ID":      "patient_id",
+        "Patient Age":     "patient_age",
+        "Patient Gender":  "patient_gender",
+    })
+
+    # Binary label
+    df["binary_label"] = df["finding_labels"].apply(
+        lambda x: 0 if str(x).strip() == NO_FINDING_LABEL else 1
+    )
+
+    # Encode sex
+    sex_map = {"M": 0, "F": 1}
+    df["patient_sex"] = df["patient_gender"].map(sex_map).fillna(2).astype(int)
+
+    # Clean age — occasionally has string artifacts
+    df["patient_age"] = pd.to_numeric(df["patient_age"], errors="coerce")
+    median_age = df["patient_age"].median()
+    df["patient_age"] = df["patient_age"].fillna(median_age).astype(float)
+
+    print(f"  Loaded {len(df):,} images from {df['patient_id'].nunique():,} patients")
+    neg = (df["binary_label"] == 0).sum()
+    pos = (df["binary_label"] == 1).sum()
+    print(f"  Binary label: neg={neg:,} ({neg/len(df)*100:.1f}%)  "
+          f"pos={pos:,} ({pos/len(df)*100:.1f}%)")
+
+    return df[["image_id", "patient_id", "finding_labels",
+               "binary_label", "patient_age", "patient_sex"]]
+
+
+# ─── Patient-level split ──────────────────────────────────────────────────────
+
+def patient_level_split(df: pd.DataFrame,
+                        val_frac: float = VAL_PATIENT_FRAC,
+                        test_frac: float = TEST_PATIENT_FRAC,
+                        seed: int = SEED
+                        ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """
+    Split data at the PATIENT level to prevent leakage.
+
+    Each patient has multiple images (follow-up scans). A naive image-level
+    split would allow the same patient's anatomy to appear in both train and
+    test, inflating performance metrics.
+
+    Strategy
+    --------
+    1. Build a patient-level DataFrame with one row per patient.
+    2. Assign each patient a majority-vote binary label
+       (if any image for that patient is positive, patient = positive).
+    3. Stratified split patients into train / val / test.
+    4. Map patient assignments back to the image-level DataFrame.
+
+    Returns
+    -------
+    train_df, val_df, test_df  — image-level DataFrames
+    """
+    # Patient-level label: positive if ANY image is positive
+    patient_df = (
+        df.groupby("patient_id")["binary_label"]
+        .max()
+        .reset_index()
+        .rename(columns={"binary_label": "patient_label"})
+    )
+
+    n_patients = len(patient_df)
+    n_val      = int(n_patients * val_frac)
+    n_test     = int(n_patients * test_frac)
+
+    # First split off test patients
+    trainval_patients, test_patients = train_test_split(
+        patient_df,
+        test_size=n_test,
+        stratify=patient_df["patient_label"],
+        random_state=seed,
+    )
+
+    # Then split trainval into train / val
+    train_patients, val_patients = train_test_split(
+        trainval_patients,
+        test_size=n_val,
+        stratify=trainval_patients["patient_label"],
+        random_state=seed,
+    )
+
+    train_ids = set(train_patients["patient_id"])
+    val_ids   = set(val_patients["patient_id"])
+    test_ids  = set(test_patients["patient_id"])
+
+    train_df = df[df["patient_id"].isin(train_ids)].reset_index(drop=True)
+    val_df   = df[df["patient_id"].isin(val_ids)].reset_index(drop=True)
+    test_df  = df[df["patient_id"].isin(test_ids)].reset_index(drop=True)
+
+    print(f"\n  Patient-level split:")
+    print(f"    Train : {len(train_patients):5,} patients  →  {len(train_df):6,} images  "
+          f"(pos={train_df['binary_label'].mean()*100:.1f}%)")
+    print(f"    Val   : {len(val_patients):5,} patients  →  {len(val_df):6,} images  "
+          f"(pos={val_df['binary_label'].mean()*100:.1f}%)")
+    print(f"    Test  : {len(test_patients):5,} patients  →  {len(test_df):6,} images  "
+          f"(pos={test_df['binary_label'].mean()*100:.1f}%)")
+
+    return train_df, val_df, test_df
+
+
+def get_kfold_splits(df: pd.DataFrame,
+                     n_folds: int = N_FOLDS,
+                     seed: int = SEED) -> list[tuple]:
+    """
+    Patient-level stratified K-fold splits for OOF generation.
+
+    Returns list of (train_df, val_df) image-level DataFrames.
+    Patient leakage is prevented — no patient appears in both
+    train and val folds.
+    """
+    # Build patient-level labels
+    patient_df = (
+        df.groupby("patient_id")["binary_label"]
+        .max()
+        .reset_index()
+    )
+
+    skf    = StratifiedKFold(n_splits=n_folds, shuffle=True,
+                              random_state=seed)
+    splits = []
+
+    for train_pat_idx, val_pat_idx in skf.split(
+        patient_df["patient_id"],
+        patient_df["binary_label"]
+    ):
+        train_patient_ids = set(
+            patient_df.iloc[train_pat_idx]["patient_id"]
+        )
+        val_patient_ids = set(
+            patient_df.iloc[val_pat_idx]["patient_id"]
+        )
+
+        fold_train = df[
+            df["patient_id"].isin(train_patient_ids)
+        ].reset_index(drop=True)
+
+        fold_val = df[
+            df["patient_id"].isin(val_patient_ids)
+        ].reset_index(drop=True)
+
+        splits.append((fold_train, fold_val))
+
+    return splits
+
+
+# ─── NIH ChestX-ray14 Dataset ────────────────────────────────────────────────
+
+class NIHChestXrayDataset(Dataset):
+    """
+    PyTorch Dataset for NIH ChestX-ray14 PNG images.
+
+    Parameters
+    ----------
+    df          : DataFrame with columns from load_nih_csv()
+                  Must contain: image_id, binary_label (if has_labels=True),
+                  patient_age, patient_sex
+    images_dir  : directory containing PNG image files
+    transform   : torchvision transform pipeline
+    has_labels  : True for train/val; False for test
     """
 
     def __init__(self,
                  df: pd.DataFrame,
-                 data_dir: str,
+                 images_dir: str = IMAGES_DIR,
                  transform=None,
-                 has_labels: bool = True,
-                 cache: bool = False):
+                 has_labels: bool = True):
         self.df         = df.reset_index(drop=True)
-        self.data_dir   = data_dir
+        self.images_dir = images_dir
         self.transform  = transform
         self.has_labels = has_labels
-        self.cache      = cache
-        self._cache: dict[int, np.ndarray] = {}
 
     def __len__(self) -> int:
         return len(self.df)
 
-    def _load_pixel_array(self, idx: int) -> np.ndarray:
-        """Load and optionally cache the pixel array for index idx."""
-        if self.cache and idx in self._cache:
-            return self._cache[idx]
-
-        row  = self.df.iloc[idx]
-        path = os.path.join(self.data_dir, f"{row['id']}.dicom")
-        arr  = read_dicom(path)
-
-        if self.cache:
-            self._cache[idx] = arr
-        return arr
-
     def __getitem__(self, idx: int) -> dict:
-        arr = self._load_pixel_array(idx)    # (H, W) float32 in [0,1]
+        row      = self.df.iloc[idx]
+        img_path = os.path.join(self.images_dir, row["image_id"])
 
-        # Convert to uint8 PIL image, then replicate to 3 channels
-        img_uint8 = (arr * 255).astype(np.uint8)
-        pil_img   = Image.fromarray(img_uint8, mode="L").convert("RGB")
+        # Load PNG — already 8-bit grayscale, convert to RGB for timm/ViT
+        pil_img = Image.open(img_path).convert("RGB")
 
         if self.transform:
             tensor = self.transform(pil_img)
         else:
             tensor = transforms.ToTensor()(pil_img)
 
-        item = {"image": tensor, "id": str(self.df.iloc[idx]["id"])}
+        item = {"image": tensor, "id": str(row["image_id"])}
 
         if self.has_labels:
-            label = int(self.df.iloc[idx]["Finding"])
-            item["label"] = torch.tensor(label, dtype=torch.float32)
+            item["label"] = torch.tensor(
+                int(row["binary_label"]), dtype=torch.float32
+            )
 
         return item
 
 
-#  Metadata DataFrame builder 
-
-def build_metadata_df(ids: list[str], data_dir: str) -> pd.DataFrame:
-    """
-    Extract age and sex metadata from DICOM files for a list of image IDs.
-    Returns a DataFrame indexed by 'id' with columns: patient_age, patient_sex.
-    """
-    records = []
-    for sid in ids:
-        path = os.path.join(data_dir, f"{sid}.dicom")
-        meta = extract_metadata(path)
-        meta["id"] = sid
-        records.append(meta)
-    df = pd.DataFrame(records).set_index("id")
-
-    # Encode sex as numeric: M=0, F=1, O=2
-    sex_map = {"M": 0, "F": 1, "O": 2}
-    df["patient_sex"] = df["patient_sex"].map(sex_map).fillna(2).astype(int)
-
-    # Fill missing ages with median
-    median_age = df["patient_age"].median()
-    df["patient_age"] = df["patient_age"].fillna(median_age)
-
-    return df
-
-
-# DataLoader factories 
+# ─── DataLoader factories ────────────────────────────────────────────────────
 
 def make_loaders(train_df: pd.DataFrame,
                  val_df: pd.DataFrame,
-                 data_dir: str = TRAIN_DIR,
+                 images_dir: str = IMAGES_DIR,
                  batch_size: int = BATCH_SIZE,
-                 num_workers: int = NUM_WORKERS,
-                 cache: bool = False
+                 num_workers: int = NUM_WORKERS
                  ) -> tuple[DataLoader, DataLoader]:
-    """
-    Build train and validation DataLoaders.
-    Returns - train_loader, val_loader
-    """
-    train_ds = ChestXrayDataset(
-        train_df, data_dir,
+    """Build train and validation DataLoaders for NIH ChestX-ray14."""
+
+    train_ds = NIHChestXrayDataset(
+        train_df, images_dir,
         transform=get_train_transforms(),
         has_labels=True,
-        cache=cache,
     )
-    val_ds = ChestXrayDataset(
-        val_df, data_dir,
+    val_ds = NIHChestXrayDataset(
+        val_df, images_dir,
         transform=get_eval_transforms(),
         has_labels=True,
-        cache=cache,
     )
     train_loader = DataLoader(
         train_ds, batch_size=batch_size, shuffle=True,
@@ -240,14 +310,14 @@ def make_loaders(train_df: pd.DataFrame,
 
 
 def make_test_loader(test_df: pd.DataFrame,
-                     data_dir: str = TEST_DIR,
+                     images_dir: str = IMAGES_DIR,
                      batch_size: int = BATCH_SIZE,
                      num_workers: int = NUM_WORKERS) -> DataLoader:
-    """Build a DataLoader for the held-out test set (no labels)."""
-    test_ds = ChestXrayDataset(
-        test_df, data_dir,
+    """Build DataLoader for the held-out test set."""
+    test_ds = NIHChestXrayDataset(
+        test_df, images_dir,
         transform=get_eval_transforms(),
-        has_labels=False,
+        has_labels=True,    # test_df has labels for evaluation
     )
     return DataLoader(
         test_ds, batch_size=batch_size, shuffle=False,
@@ -255,62 +325,31 @@ def make_test_loader(test_df: pd.DataFrame,
     )
 
 
-# Split helpers
+# ─── Metadata builder for CatBoost ───────────────────────────────────────────
 
-def load_training_df() -> pd.DataFrame:
-    """Load data.csv and return only rows that have a Finding label."""
-    df = pd.read_csv(DATA_CSV, dtype={"id": "str", "Finding": "Int64"})
-    return df.loc[~df["Finding"].isna()].copy().reset_index(drop=True)
-
-
-def train_val_split(df: pd.DataFrame,
-                    val_size: int = 2000,
-                    seed: int = SEED
-                    ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Stratified train / validation split matching the original notebook."""
-    train, val = train_test_split(
-        df, test_size=val_size,
-        random_state=seed, stratify=df["Finding"],
-    )
-    return train.reset_index(drop=True), val.reset_index(drop=True)
-
-
-def get_kfold_splits(df: pd.DataFrame,
-                     n_folds: int = N_FOLDS,
-                     seed: int = SEED) -> list[tuple]:
+def build_metadata_df(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Return a list of (train_df, val_df) tuples for stratified k-fold CV.
-    Used during OOF generation to train CatBoost without leakage.
+    Extract age and sex from the NIH CSV DataFrame for CatBoost features.
+    Much simpler than DICOM extraction — metadata is already in the CSV.
+
+    Returns DataFrame indexed by image_id with columns:
+      patient_age (float), patient_sex (int: M=0, F=1, other=2)
     """
-    skf    = StratifiedKFold(n_splits=n_folds, shuffle=True, random_state=seed)
-    splits = []
-    for train_idx, val_idx in skf.split(df, df["Finding"]):
-        splits.append((
-            df.iloc[train_idx].reset_index(drop=True),
-            df.iloc[val_idx].reset_index(drop=True),
-        ))
-    return splits
+    meta = df[["image_id", "patient_age", "patient_sex"]].copy()
+    meta = meta.set_index("image_id")
+    return meta
 
 
-def load_test_df() -> pd.DataFrame:
-    """Build a DataFrame of test image IDs (no labels)."""
-    import pathlib
-    paths = list(pathlib.Path(TEST_DIR).glob("*.dicom"))
-    ids   = [p.stem for p in paths]
-    return pd.DataFrame({"id": ids, "Finding": pd.NA})
-
-
-# Positive weight for weighted BCE loss 
+# ─── Positive weight for BCE loss ────────────────────────────────────────────
 
 def compute_pos_weight(df: pd.DataFrame) -> torch.Tensor:
     """
     Compute pos_weight = n_negative / n_positive for BCEWithLogitsLoss.
-    Returned as a 1-element tensor.
     """
-    counts     = df["Finding"].value_counts()
+    counts     = df["binary_label"].value_counts()
     n_neg      = float(counts.get(0, 1))
     n_pos      = float(counts.get(1, 1))
     pos_weight = n_neg / n_pos
     print(f"  pos_weight = {pos_weight:.3f}  "
-          f"(n_neg={int(n_neg)}, n_pos={int(n_pos)})")
+          f"(n_neg={int(n_neg):,}, n_pos={int(n_pos):,})")
     return torch.tensor([pos_weight], dtype=torch.float32)
