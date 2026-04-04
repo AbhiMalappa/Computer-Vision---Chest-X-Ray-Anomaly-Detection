@@ -1,15 +1,22 @@
 """
-config.py — Central configuration for all hyperparameters, paths, and model names.
+config.py — Central configuration for NIH ChestX-ray14 pipeline (Paper 1).
+
+Dataset : NIH ChestX-ray14
+         112,120 PNG images, 30,805 unique patients
+         14 disease labels → consolidated to binary
+         Binary split: No Finding = 0, any disease present = 1
+         Class distribution: ~53.9% negative / ~46.1% positive
+
 Edit this file to change any setting across the entire pipeline.
 """
 
 import os
 
-#Paths 
-DATA_DIR        = "../data"
-TRAIN_DIR       = os.path.join(DATA_DIR, "Training")
-TEST_DIR        = os.path.join(DATA_DIR, "Test")
-DATA_CSV        = os.path.join(DATA_DIR, "data.csv")
+# ─── Paths ────────────────────────────────────────────────────────────────────
+DATA_DIR        = "../data/nih_chestxray14"
+IMAGES_DIR      = os.path.join(DATA_DIR, "images")          # PNG images folder
+DATA_ENTRY_CSV  = os.path.join(DATA_DIR, "Data_Entry_2017.csv")  # labels + metadata
+
 SAVE_DIR        = "./saved_models"
 OOF_DIR         = "./oof_predictions"
 SUBMIT_DIR      = "./submissions"
@@ -18,32 +25,47 @@ os.makedirs(SAVE_DIR,   exist_ok=True)
 os.makedirs(OOF_DIR,    exist_ok=True)
 os.makedirs(SUBMIT_DIR, exist_ok=True)
 
-# Reproducibility
+# ─── Reproducibility ──────────────────────────────────────────────────────────
 SEED = 722
 
-# Image settings
-IMG_SIZE    = 224          # All models use 224×224
-NUM_CHANNELS = 3           # Grayscale → replicated to 3 channels
+# ─── Image settings ───────────────────────────────────────────────────────────
+IMG_SIZE     = 224      # All models use 224×224
+NUM_CHANNELS = 3        # PNG grayscale → replicated to 3 channels
 
-# Training
-BATCH_SIZE      = 32
-NUM_WORKERS     = 4
-MAX_EPOCHS      = 30
-LEARNING_RATE   = 1e-4
-WEIGHT_DECAY    = 1e-4
-EARLY_STOP_PATIENCE = 5    # epochs without val MCC improvement
+# ─── Binary label mapping ─────────────────────────────────────────────────────
+# ChestX-ray14 Finding Labels column contains pipe-separated disease names
+# e.g. "Atelectasis|Effusion" or "No Finding"
+# We map: "No Finding" → 0, any disease present → 1
+NO_FINDING_LABEL = "No Finding"
 
-# Class imbalance 
-# Computed from training data: ~70% negative, ~30% positive
-# pos_weight = n_neg / n_pos ≈ 2.41  (used in BCEWithLogitsLoss)
-# Will be recomputed dynamically in train scripts, but set a fallback here
-POS_WEIGHT_FALLBACK = 2.41
+# ─── Patient-level split ──────────────────────────────────────────────────────
+# CRITICAL: ChestX-ray14 patients have multiple follow-up images.
+# Splitting at image level causes data leakage (same patient in train + test).
+# We always split at PATIENT level first, then stratify by binary label.
+VAL_PATIENT_FRAC  = 0.15   # 15% of patients → validation
+TEST_PATIENT_FRAC = 0.15   # 15% of patients → test
+# Remaining ~70% of patients → training
 
-# Cross-validation
-N_FOLDS = 5                # Stratified K-Fold for OOF generation
+# ─── Training ─────────────────────────────────────────────────────────────────
+BATCH_SIZE           = 32
+NUM_WORKERS          = 4
+MAX_EPOCHS           = 30
+LEARNING_RATE        = 1e-4
+WEIGHT_DECAY         = 1e-4
+EARLY_STOP_PATIENCE  = 5    # epochs without val MCC improvement
 
-# timm models 
-# Diverse backbone selection: CNN, ConvNeXt, Swin Transformer, DenseNet, DeiT
+# ─── Class imbalance ──────────────────────────────────────────────────────────
+# ChestX-ray14 binary: ~53.9% negative / ~46.1% positive — much less severe
+# than VinBigData (70/30). pos_weight recomputed dynamically from training split.
+# Fallback if dynamic computation fails:
+POS_WEIGHT_FALLBACK = 1.17   # 53.9 / 46.1
+
+# ─── Cross-validation (OOF) ───────────────────────────────────────────────────
+# Reduced to 3 folds for ChestX-ray14 due to dataset size (112k images).
+# Still patient-level stratified to prevent leakage.
+N_FOLDS = 3
+
+# ─── timm models ──────────────────────────────────────────────────────────────
 TIMM_MODELS = [
     "efficientnet_b3",
     "convnext_small",
@@ -52,25 +74,28 @@ TIMM_MODELS = [
     "deit_small_patch16_224",
 ]
 
-# ViT (HuggingFace)
-VIT_MODEL_NAME  = "google/vit-base-patch16-224-in21k"
-VIT_LEARNING_RATE = 5e-5   # ViT typically needs a smaller LR
+# ─── ViT (HuggingFace) ────────────────────────────────────────────────────────
+VIT_MODEL_NAME    = "google/vit-base-patch16-224-in21k"
+VIT_LEARNING_RATE = 5e-5
 
-# CatBoost
+# ─── CatBoost ─────────────────────────────────────────────────────────────────
 CATBOOST_PARAMS = {
-    "iterations":        1000,
-    "learning_rate":     0.05,
-    "depth":             6,
-    "loss_function":     "Logloss",
-    "eval_metric":       "MCC",
-    "random_seed":       SEED,
+    "iterations":            1000,
+    "learning_rate":         0.05,
+    "depth":                 6,
+    "loss_function":         "Logloss",
+    "eval_metric":           "MCC",
+    "random_seed":           SEED,
     "early_stopping_rounds": 50,
-    "verbose":           100,
-    "auto_class_weights": "Balanced",   # handles 70/30 imbalance
+    "verbose":               100,
+    "auto_class_weights":    "Balanced",
 }
 
-# Metadata columns fed into CatBoost
+# ─── Metadata features fed into CatBoost ─────────────────────────────────────
+# ChestX-ray14 Data_Entry_2017.csv columns used:
+#   Patient Age   → patient_age  (numeric)
+#   Patient Gender → patient_sex (encoded: M=0, F=1)
 META_FEATURES = ["patient_age", "patient_sex"]
 
-# MCC threshold search
-THRESHOLD_GRID_SIZE = 200  # number of candidate thresholds in [0, 1]
+# ─── MCC threshold search ─────────────────────────────────────────────────────
+THRESHOLD_GRID_SIZE = 200
