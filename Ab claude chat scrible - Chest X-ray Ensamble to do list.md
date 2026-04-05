@@ -15,24 +15,28 @@
 
 ---
 
-## Paper Completed ✅
-
-Abstract
-I. Introduction
-II. Related Work
-III. Dataset & Preprocessing
-IV. Methodology
-
-
 ## Paper Remaining ✍️
-Section V — Experiments & Results
+1. Section V — Experiments & Results
+2. Implementation details (GPU, versions, GitHub)
+3. Baseline comparison table — each backbone vs stack
+4. Ablation study — 3 ablations proving each component contributes
+5. Threshold analysis — MCC vs threshold curve
+6. Feature importance — which model and metadata contribute most
+7. Per-pathology breakdown on test set
 
-Implementation details (GPU, versions, GitHub)
-Baseline comparison table — each backbone vs stack
-Ablation study — 3 ablations proving each component contributes
-Threshold analysis — MCC vs threshold curve
-Feature importance — which model and metadata contribute most
-Per-pathology breakdown on test set
+## References - Four marked [REPLACE] — these need your literature search:
+[2] — inter-reader variability paper
+[4] — radiologist fatigue paper
+[22] — multi-resolution stacking preprint
+[29] — the PMC6476887 metadata signal paper (find the exact title)
+
+## Next steps in order:
+
+1. Run the training pipeline
+2. Fill in all [—] result placeholders
+3. Replace the four [REPLACE] references
+4. Replace all [CITE X] tags in the body with their [number] equivalents
+5. Post to arXiv — submit to IEEE JBHI
 
 ---
 ### Novelty Claim
