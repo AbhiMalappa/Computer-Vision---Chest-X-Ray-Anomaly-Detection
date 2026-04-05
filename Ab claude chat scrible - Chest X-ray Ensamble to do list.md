@@ -15,7 +15,26 @@
 
 ---
 
+## Paper Completed ✅
 
+Abstract
+I. Introduction
+II. Related Work
+III. Dataset & Preprocessing
+IV. Methodology
+
+
+## Paper Remaining ✍️
+Section V — Experiments & Results
+
+Implementation details (GPU, versions, GitHub)
+Baseline comparison table — each backbone vs stack
+Ablation study — 3 ablations proving each component contributes
+Threshold analysis — MCC vs threshold curve
+Feature importance — which model and metadata contribute most
+Per-pathology breakdown on test set
+
+---
 ### Novelty Claim
 
 **⭐ CORE NOVELTY STATEMENT — use this exact framing throughout the paper:**
