@@ -13,7 +13,12 @@ Edit this file to change any setting across the entire pipeline.
 import os
 
 # ─── Paths ────────────────────────────────────────────────────────────────────
-DATA_DIR        = "./data"
+# Auto-detect environment: Kaggle vs local
+if os.path.exists("/kaggle/input/nih-chest-xrays"):
+    DATA_DIR = "/kaggle/input/nih-chest-xrays"
+else:
+    DATA_DIR = "./data"
+
 IMAGES_DIR      = os.path.join(DATA_DIR, "images")          # PNG images folder
 DATA_ENTRY_CSV  = os.path.join(DATA_DIR, "Data_Entry_2017.csv")  # labels + metadata
 
