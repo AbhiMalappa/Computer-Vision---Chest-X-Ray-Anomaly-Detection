@@ -13,14 +13,18 @@ Edit this file to change any setting across the entire pipeline.
 import os
 
 # ─── Paths ────────────────────────────────────────────────────────────────────
-# Auto-detect environment: Kaggle vs local
-if os.path.exists("/kaggle/input/nih-chest-xrays"):
-    DATA_DIR = "/kaggle/input/nih-chest-xrays"
-else:
-    DATA_DIR = "./data"
+# Auto-detect environment: search for Data_Entry_2017.csv anywhere under
+# /kaggle/input (handles different dataset slug paths), fall back to ./data.
+def _find_data_dir() -> str:
+    import glob
+    matches = glob.glob("/kaggle/input/**/Data_Entry_2017.csv", recursive=True)
+    if matches:
+        return os.path.dirname(matches[0])
+    return "./data"
 
-IMAGES_DIR      = os.path.join(DATA_DIR, "images")          # PNG images folder
-DATA_ENTRY_CSV  = os.path.join(DATA_DIR, "Data_Entry_2017.csv")  # labels + metadata
+DATA_DIR        = _find_data_dir()
+IMAGES_DIR      = os.path.join(DATA_DIR, "images")          # local flat structure
+DATA_ENTRY_CSV  = os.path.join(DATA_DIR, "Data_Entry_2017.csv")
 
 SAVE_DIR        = "./saved_models"
 OOF_DIR         = "./oof_predictions"

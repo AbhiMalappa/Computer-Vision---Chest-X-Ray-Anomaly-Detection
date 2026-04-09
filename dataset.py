@@ -13,6 +13,7 @@ Key differences from VinBigData pipeline:
 """
 
 import os
+import glob as _glob
 import numpy as np
 import pandas as pd
 import torch
@@ -22,13 +23,35 @@ from PIL import Image
 from sklearn.model_selection import train_test_split, StratifiedKFold
 
 from config import (
-    IMAGES_DIR, DATA_ENTRY_CSV,
+    DATA_DIR, IMAGES_DIR, DATA_ENTRY_CSV,
     IMG_SIZE, BATCH_SIZE, NUM_WORKERS,
     SEED, N_FOLDS,
     NO_FINDING_LABEL,
     VAL_PATIENT_FRAC, TEST_PATIENT_FRAC,
     DEBUG_SUBSET,
 )
+
+
+# ─── Image index ──────────────────────────────────────────────────────────────
+# Builds a mapping of {image_id: full_path} that handles both:
+#   - Local flat structure:  ./data/images/00000001_000.png
+#   - Kaggle split structure: .../images_001/00000001_000.png  ... images_012/
+def _build_image_index() -> dict:
+    index = {}
+    # Flat images/ directory (local)
+    if os.path.isdir(IMAGES_DIR):
+        for fname in os.listdir(IMAGES_DIR):
+            if fname.endswith(".png"):
+                index[fname] = os.path.join(IMAGES_DIR, fname)
+    # Split images_001 … images_012 subdirectories (Kaggle)
+    for subdir in sorted(_glob.glob(os.path.join(DATA_DIR, "images_*"))):
+        if os.path.isdir(subdir):
+            for fname in os.listdir(subdir):
+                if fname.endswith(".png"):
+                    index[fname] = os.path.join(subdir, fname)
+    return index
+
+IMAGE_INDEX = _build_image_index()
 
 
 # ─── torchvision transforms ───────────────────────────────────────────────────
@@ -101,9 +124,8 @@ def load_nih_csv(csv_path: str = DATA_ENTRY_CSV) -> pd.DataFrame:
     df["patient_age"] = df["patient_age"].fillna(median_age).astype(float)
 
     # Filter to only images that exist on disk (handles partial downloads)
-    available = set(os.listdir(IMAGES_DIR))
     before = len(df)
-    df = df[df["image_id"].isin(available)].reset_index(drop=True)
+    df = df[df["image_id"].isin(IMAGE_INDEX)].reset_index(drop=True)
     if len(df) < before:
         print(f"  Filtered to images on disk: {len(df):,} / {before:,}")
 
@@ -271,7 +293,10 @@ class NIHChestXrayDataset(Dataset):
 
     def __getitem__(self, idx: int) -> dict:
         row      = self.df.iloc[idx]
-        img_path = os.path.join(self.images_dir, row["image_id"])
+        img_path = IMAGE_INDEX.get(
+            row["image_id"],
+            os.path.join(self.images_dir, row["image_id"])  # fallback
+        )
 
         # Load PNG — already 8-bit grayscale, convert to RGB for timm/ViT
         pil_img = Image.open(img_path).convert("RGB")
