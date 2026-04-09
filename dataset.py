@@ -44,11 +44,15 @@ def _build_image_index() -> dict:
             if fname.endswith(".png"):
                 index[fname] = os.path.join(IMAGES_DIR, fname)
     # Split images_001 … images_012 subdirectories (Kaggle)
+    # Each images_XXX may contain a nested images/ folder:
+    #   images_001/images/00000001_000.png
     for subdir in sorted(_glob.glob(os.path.join(DATA_DIR, "images_*"))):
         if os.path.isdir(subdir):
-            for fname in os.listdir(subdir):
+            inner = os.path.join(subdir, "images")
+            search_dir = inner if os.path.isdir(inner) else subdir
+            for fname in os.listdir(search_dir):
                 if fname.endswith(".png"):
-                    index[fname] = os.path.join(subdir, fname)
+                    index[fname] = os.path.join(search_dir, fname)
     return index
 
 IMAGE_INDEX = _build_image_index()
