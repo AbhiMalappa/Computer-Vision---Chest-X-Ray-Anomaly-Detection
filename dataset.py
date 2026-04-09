@@ -27,6 +27,7 @@ from config import (
     SEED, N_FOLDS,
     NO_FINDING_LABEL,
     VAL_PATIENT_FRAC, TEST_PATIENT_FRAC,
+    DEBUG_SUBSET,
 )
 
 
@@ -99,6 +100,13 @@ def load_nih_csv(csv_path: str = DATA_ENTRY_CSV) -> pd.DataFrame:
     median_age = df["patient_age"].median()
     df["patient_age"] = df["patient_age"].fillna(median_age).astype(float)
 
+    # Filter to only images that exist on disk (handles partial downloads)
+    available = set(os.listdir(IMAGES_DIR))
+    before = len(df)
+    df = df[df["image_id"].isin(available)].reset_index(drop=True)
+    if len(df) < before:
+        print(f"  Filtered to images on disk: {len(df):,} / {before:,}")
+
     print(f"  Loaded {len(df):,} images from {df['patient_id'].nunique():,} patients")
     neg = (df["binary_label"] == 0).sum()
     pos = (df["binary_label"] == 1).sum()
@@ -142,6 +150,13 @@ def patient_level_split(df: pd.DataFrame,
         .reset_index()
         .rename(columns={"binary_label": "patient_label"})
     )
+
+    # Debug mode: subsample to a small number of patients for fast testing
+    if DEBUG_SUBSET is not None:
+        n_sample = min(DEBUG_SUBSET, len(patient_df))
+        patient_df = patient_df.sample(n=n_sample, random_state=seed).reset_index(drop=True)
+        df = df[df["patient_id"].isin(patient_df["patient_id"])].reset_index(drop=True)
+        print(f"  [DEBUG] Subsampled to {n_sample} patients / {len(df)} images")
 
     n_patients = len(patient_df)
     n_val      = int(n_patients * val_frac)
@@ -214,13 +229,11 @@ def get_kfold_splits(df: pd.DataFrame,
             patient_df.iloc[val_pat_idx]["patient_id"]
         )
 
-        fold_train = df[
-            df["patient_id"].isin(train_patient_ids)
-        ].reset_index(drop=True)
-
-        fold_val = df[
-            df["patient_id"].isin(val_patient_ids)
-        ].reset_index(drop=True)
+        # Do NOT reset_index here — original indices are needed by
+        # generate_oof.py to map val predictions back to the right
+        # positions in the oof_probs array.
+        fold_train = df[df["patient_id"].isin(train_patient_ids)]
+        fold_val   = df[df["patient_id"].isin(val_patient_ids)]
 
         splits.append((fold_train, fold_val))
 

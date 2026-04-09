@@ -13,7 +13,7 @@ Edit this file to change any setting across the entire pipeline.
 import os
 
 # ─── Paths ────────────────────────────────────────────────────────────────────
-DATA_DIR        = "../data/nih_chestxray14"
+DATA_DIR        = "./data"
 IMAGES_DIR      = os.path.join(DATA_DIR, "images")          # PNG images folder
 DATA_ENTRY_CSV  = os.path.join(DATA_DIR, "Data_Entry_2017.csv")  # labels + metadata
 
@@ -46,6 +46,12 @@ VAL_PATIENT_FRAC  = 0.15   # 15% of patients → validation
 TEST_PATIENT_FRAC = 0.15   # 15% of patients → test
 # Remaining ~70% of patients → training
 
+# ─── Debug / fast-iteration mode ──────────────────────────────────────────────
+# Set to an integer to subsample that many patients for a quick end-to-end test.
+# 500 patients ≈ 1,800 images — enough to verify the full pipeline in ~30 min.
+# Set to None for the full 30,805-patient training run.
+DEBUG_SUBSET = 500   # set to None for full run
+
 # ─── Training ─────────────────────────────────────────────────────────────────
 BATCH_SIZE           = 32
 NUM_WORKERS          = 4
@@ -77,6 +83,7 @@ TIMM_MODELS = [
 # ─── ViT (HuggingFace) ────────────────────────────────────────────────────────
 VIT_MODEL_NAME    = "google/vit-base-patch16-224-in21k"
 VIT_LEARNING_RATE = 5e-5
+SKIP_VIT          = False  # set to True to skip ViT (e.g. local CPU testing)
 
 # ─── CatBoost ─────────────────────────────────────────────────────────────────
 CATBOOST_PARAMS = {

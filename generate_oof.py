@@ -30,12 +30,12 @@ import timm
 from config import (
     TIMM_MODELS, OOF_DIR, SAVE_DIR, SEED,
     MAX_EPOCHS, LEARNING_RATE, WEIGHT_DECAY,
-    EARLY_STOP_PATIENCE, VIT_LEARNING_RATE, N_FOLDS,
+    EARLY_STOP_PATIENCE, VIT_LEARNING_RATE, N_FOLDS, SKIP_VIT,
 )
 from dataset import (
-    load_training_df, get_kfold_splits,
-    make_loaders, compute_pos_weight,
-    build_metadata_df, TRAIN_DIR,
+    load_nih_csv, patient_level_split,
+    get_kfold_splits, make_loaders,
+    compute_pos_weight, build_metadata_df,
 )
 from train_timm import build_timm_model, train_one_epoch, evaluate as timm_evaluate
 from train_vit  import ViTClassifier, train_one_epoch as vit_train_epoch
@@ -195,18 +195,15 @@ def save_oof_labels_and_metadata(df) -> None:
     meta_path   = os.path.join(OOF_DIR, "oof_metadata.csv")
 
     if not os.path.exists(labels_path):
-        np.save(labels_path, df["Finding"].values.astype(int))
+        np.save(labels_path, df["binary_label"].values.astype(int))
         print(f"  Labels saved  → {labels_path}")
 
     if not os.path.exists(ids_path):
-        np.save(ids_path, df["id"].values)
+        np.save(ids_path, df["image_id"].values)
         print(f"  IDs saved     → {ids_path}")
 
     if not os.path.exists(meta_path):
-        print("  Extracting metadata from DICOMs (one-time, may take a moment)…")
-        meta_df = build_metadata_df(df["id"].tolist(), TRAIN_DIR)
-        # Re-align to df order
-        meta_df = meta_df.loc[df["id"]]
+        meta_df = build_metadata_df(df)
         meta_df.to_csv(meta_path)
         print(f"  Metadata saved → {meta_path}")
 
@@ -228,12 +225,13 @@ def main():
     args = parser.parse_args()
 
     device = get_device()
-    df     = load_training_df()
+    df_full = load_nih_csv()
+    df, _, _ = patient_level_split(df_full)
 
     # Save shared metadata once
     save_oof_labels_and_metadata(df)
 
-    all_models = TIMM_MODELS + ["vit"]
+    all_models = TIMM_MODELS if SKIP_VIT else TIMM_MODELS + ["vit"]
     models_to_run = [args.model] if args.model else all_models
 
     for model_name in models_to_run:

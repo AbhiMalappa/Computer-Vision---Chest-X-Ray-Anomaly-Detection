@@ -86,3 +86,9 @@ meta_train.df
 *.tmp
 *.bak
 .cache/
+
+# ─── CatBoost training logs ───────────────────────────────────────────────────
+catboost_info/
+
+# ─── Private planning docs ────────────────────────────────────────────────────
+paper1_plan.md

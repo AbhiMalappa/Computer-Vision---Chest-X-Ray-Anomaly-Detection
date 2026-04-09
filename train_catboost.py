@@ -26,20 +26,22 @@ Outputs
 import os
 import numpy as np
 import pandas as pd
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from catboost import CatBoostClassifier, Pool
 from sklearn.model_selection import StratifiedKFold
 
 from config import (
     OOF_DIR, SAVE_DIR, SEED, CATBOOST_PARAMS,
-    TIMM_MODELS, N_FOLDS, THRESHOLD_GRID_SIZE,
+    TIMM_MODELS, N_FOLDS, THRESHOLD_GRID_SIZE, SKIP_VIT,
 )
 from utils import find_best_threshold, compute_metrics, plot_roc_pr
 
 
-#  Feature assembly 
+#  Feature assembly
 
-MODEL_NAMES = TIMM_MODELS + ["vit"]
+MODEL_NAMES = TIMM_MODELS if SKIP_VIT else TIMM_MODELS + ["vit"]
 
 FEATURE_NAMES = [f"prob_{m}" for m in MODEL_NAMES] + \
                 ["patient_age", "patient_sex"]
@@ -74,7 +76,7 @@ def load_oof_features() -> tuple[np.ndarray, np.ndarray]:
             f"Metadata file not found: {meta_path}\n"
             "Run generate_oof.py first."
         )
-    meta_df = pd.read_csv(meta_path, index_col="id")
+    meta_df = pd.read_csv(meta_path, index_col="image_id")
 
     # Re-order metadata to match OOF label order
     ids_path = os.path.join(OOF_DIR, "oof_ids.npy")
@@ -176,7 +178,7 @@ def plot_feature_importance(model: CatBoostClassifier,
     plt.tight_layout()
     plt.savefig(save_path, dpi=150, bbox_inches="tight")
     print(f"  Feature importance plot saved → {save_path}")
-    plt.show()
+    plt.close()
 
 
 #  Entry point 

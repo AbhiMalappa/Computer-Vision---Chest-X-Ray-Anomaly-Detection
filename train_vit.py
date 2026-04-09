@@ -28,7 +28,7 @@ from config import (
     EARLY_STOP_PATIENCE, VIT_LEARNING_RATE,
 )
 from dataset import (
-    load_training_df, train_val_split,
+    load_nih_csv, patient_level_split,
     make_loaders, compute_pos_weight,
 )
 from utils import (
@@ -240,8 +240,8 @@ def train_vit(train_df,
 def main():
     device = get_device()
 
-    df              = load_training_df()
-    train_df, val_df = train_val_split(df)
+    df = load_nih_csv()
+    train_df, val_df, _ = patient_level_split(df)
     pos_weight      = compute_pos_weight(train_df)
 
     train_vit(train_df, val_df, device, pos_weight)

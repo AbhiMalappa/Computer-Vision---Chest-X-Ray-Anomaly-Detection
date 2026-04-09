@@ -22,11 +22,11 @@ from catboost import CatBoostClassifier, Pool
 
 from config import (
     TIMM_MODELS, SAVE_DIR, SUBMIT_DIR,
-    BATCH_SIZE, SEED,
+    BATCH_SIZE, SEED, SKIP_VIT,
 )
 from dataset import (
-    load_test_df, make_test_loader,
-    build_metadata_df, TEST_DIR,
+    load_nih_csv, patient_level_split,
+    make_test_loader, build_metadata_df,
 )
 from train_timm import build_timm_model
 from train_vit  import ViTClassifier
@@ -52,7 +52,7 @@ def predict_probs(model: torch.nn.Module,
     for batch in loader:
         images = batch["image"].to(device, non_blocking=True)
         with torch.cuda.amp.autocast(enabled=device.type == "cuda"):
-            logits = model(images).squeeze(1)
+            logits = model(images).reshape(-1)   # handles (B,1) from timm and (B,) from ViT
         probs = torch.sigmoid(logits).cpu().numpy()
         all_probs.extend(probs.tolist())
 
@@ -82,16 +82,17 @@ def load_all_models(device: torch.device) -> dict:
         models[model_name] = model
 
     # ViT
-    vit_path = os.path.join(SAVE_DIR, "vit_best.pt")
-    if not os.path.exists(vit_path):
-        raise FileNotFoundError(
-            f"ViT checkpoint not found: {vit_path}\n"
-            "Run: python train_vit.py"
-        )
-    vit = ViTClassifier().to(device)
-    load_checkpoint(vit, vit_path, device)
-    vit.eval()
-    models["vit"] = vit
+    if not SKIP_VIT:
+        vit_path = os.path.join(SAVE_DIR, "vit_best.pt")
+        if not os.path.exists(vit_path):
+            raise FileNotFoundError(
+                f"ViT checkpoint not found: {vit_path}\n"
+                "Run: python train_vit.py"
+            )
+        vit = ViTClassifier().to(device)
+        load_checkpoint(vit, vit_path, device)
+        vit.eval()
+        models["vit"] = vit
 
     return models
 
@@ -121,9 +122,7 @@ def build_test_features(test_df: pd.DataFrame,
 
     # Metadata
     print("  Extracting test metadata…")
-    meta_df = build_metadata_df(test_df["id"].tolist(), TEST_DIR)
-    # Align to test_df order
-    meta_df  = meta_df.loc[test_df["id"]]
+    meta_df = build_metadata_df(test_df)
     age = meta_df["patient_age"].values.astype(np.float32)
     sex = meta_df["patient_sex"].values.astype(np.float32)
 
@@ -175,8 +174,9 @@ def main():
     set_seed(SEED)
     device   = get_device()
 
-    # Test data
-    test_df  = load_test_df()
+    # Test data — same patient-level split as training (fixed seed)
+    df_full = load_nih_csv()
+    _, _, test_df = patient_level_split(df_full)
     print(f"  Test images: {len(test_df)}")
 
     # Load all vision models
@@ -193,7 +193,7 @@ def main():
 
     # Submission DataFrame
     submit = pd.DataFrame({
-        "id":      test_df["id"].values,
+        "id":      test_df["image_id"].values,
         "Outcome": preds,
     })
 

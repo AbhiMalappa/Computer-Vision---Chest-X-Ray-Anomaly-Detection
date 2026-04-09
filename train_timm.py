@@ -28,7 +28,7 @@ from config import (
     EARLY_STOP_PATIENCE, BATCH_SIZE,
 )
 from dataset import (
-    load_training_df, train_val_split,
+    load_nih_csv, patient_level_split,
     make_loaders, compute_pos_weight,
 )
 from utils import (
@@ -255,8 +255,8 @@ def main():
     device = get_device()
 
     # Load data
-    df         = load_training_df()
-    train_df, val_df = train_val_split(df)
+    df = load_nih_csv()
+    train_df, val_df, _ = patient_level_split(df)
     pos_weight = compute_pos_weight(train_df)
 
     models_to_train = [args.model] if args.model else TIMM_MODELS

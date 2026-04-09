@@ -11,8 +11,11 @@ Includes:
 
 import os
 import random
+from typing import Optional
 import numpy as np
 import torch
+import matplotlib
+matplotlib.use("Agg")   # non-interactive backend — no display needed
 import matplotlib.pyplot as plt
 
 from sklearn.metrics import (
@@ -111,7 +114,7 @@ def compute_metrics(y_true: np.ndarray,
 def plot_roc_pr(y_true: np.ndarray,
                 y_prob: np.ndarray,
                 title_suffix: str = "",
-                save_path: str | None = None) -> None:
+                save_path: Optional[str] = None) -> None:
     """Plot ROC curve and Precision-Recall curve side-by-side."""
     fpr, tpr, _ = roc_curve(y_true, y_prob)
     roc_auc      = auc(fpr, tpr)
@@ -151,12 +154,12 @@ def plot_roc_pr(y_true: np.ndarray,
     if save_path:
         plt.savefig(save_path, dpi=150, bbox_inches="tight")
         print(f"  Plot saved → {save_path}")
-    plt.show()
+    plt.close()
 
 
 def plot_training_history(history: dict,
                           model_name: str = "",
-                          save_path: str | None = None) -> None:
+                          save_path: Optional[str] = None) -> None:
     """
     Plot training vs validation loss and MCC over epochs.
     history keys expected: 'train_loss', 'val_loss', 'train_mcc', 'val_mcc'
@@ -180,7 +183,7 @@ def plot_training_history(history: dict,
     if save_path:
         plt.savefig(save_path, dpi=150, bbox_inches="tight")
         print(f"  Plot saved → {save_path}")
-    plt.show()
+    plt.close()
 
 
 #  Checkpoint helpers 
@@ -188,7 +191,7 @@ def save_checkpoint(model: torch.nn.Module,
                     path: str,
                     epoch: int,
                     val_mcc: float,
-                    extra: dict | None = None) -> None:
+                    extra: Optional[dict] = None) -> None:
     """Save model weights and metadata to disk."""
     payload = {
         "epoch":   epoch,
