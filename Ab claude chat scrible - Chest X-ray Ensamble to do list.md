@@ -38,6 +38,14 @@
 4. Replace all [CITE X] tags in the body with their [number] equivalents
 5. Post to arXiv — submit to IEEE JBHI
 
+### What the paper needs that you don't have yet
+
+1. **Literature review** — you need to cite 20–30 existing chest X-ray AI papers and explain what your work adds
+2. **Ablation study** — show each model's individual contribution to the ensemble (this is actually already easy with your pipeline)
+3. **Statistical significance** — confidence intervals on your MCC, not just a point estimate
+4. **Radiologist validation** — ideally one radiologist reviews a sample of predictions. This is where your Kaiser access is a huge advantage
+5. **Limitations section** — distribution shift (Vietnamese hospital data), class consolidation, no external validation set
+
 ---
 ### Novelty Claim
 
@@ -46,6 +54,13 @@
 > *"We propose a stacking ensemble framework that combines heterogeneous vision model predictions with patient metadata via a learned meta-learner, and demonstrate that this architecture outperforms single-model baselines on binary chest X-ray triage — a clinically critical screening task"*
 
 This framing is what keeps the paper novel. The **task** (binary chest X-ray classification) is known and published. The **architecture** is the contribution. Never lead with the task — always lead with the architecture.
+
+How to say it to a skeptical reviewer:
+If a reviewer says "stacking has been done before" — your response is:
+
+*"We agree stacking is an established technique. Our contribution is the first application of architecturally diverse stacking with patient-level OOF leakage prevention and demographic metadata integration to binary chest X-ray triage on the NIH ChestX-ray14 benchmark. Each of these three design choices is individually motivated, and our ablation study (Table V) demonstrates that each contributes measurably to overall MCC."*
+
+That response is airtight because it is specific, it points to your ablation table as evidence, and it does not overclaim.
 
 ---
 
@@ -73,6 +88,25 @@ Nobody has published this specific combination:
    → Frame binary triage as the clinically relevant first-pass screening step. Multi-label is future work.
 
 ---
+**Four Specific Sub-Claims**
+1. Sub-claim 1 — Architectural diversity in the ensemble
+Prior stacking in chest X-ray uses variants of the same backbone family (e.g., EfficientNet-B0/B1/B2). We use six architecturally diverse backbones spanning three design families — convolutional, hybrid, and pure transformer. This diversity produces uncorrelated errors that the meta-learner exploits. No prior published work on chest X-ray binary triage has done this specific combination.
+2. Sub-claim 2 — Leakage-free OOF at patient level
+Prior stacking work trains the meta-learner on in-sample predictions — causing data leakage. We prevent this with patient-level stratified OOF cross-validation. The patient-level stratification additionally prevents follow-up scan leakage — a known but frequently ignored problem in ChestX-ray14 benchmarking.
+3. Sub-claim 3 — Demographic metadata as a tabular modality
+Age and sex are available in every radiology record but consistently discarded in ensemble pipelines. We integrate them as tabular features in CatBoost — not injected into the neural network. Prior work that includes metadata concatenates it inside the neural network, adding architectural complexity and instability.
+4. Sub-claim 4 — MCC-optimised threshold selection
+Almost all chest X-ray papers use AUC-ROC and a default 0.5 threshold. We use MCC as the early stopping criterion during training and grid-search for the MCC-optimal threshold. This is a methodological contribution to how chest X-ray triage models should be evaluated.
+
+What We Are NOT Claiming
+
+1. Not claiming to invent stacking (Wolpert 1992)
+2. Not claiming to invent OOF (standard ML practice)
+3. Not claiming to invent any of the six backbones
+4. Not claiming the binary triage task is new
+5. Not claiming state-of-the-art on all 14 disease labels
+
+---
 
 **Related Work structure that makes novelty airtight (3 paragraphs):**
 
@@ -82,14 +116,5 @@ Nobody has published this specific combination:
 
 ---
 
-### What the paper needs that you don't have yet
-
-1. **Literature review** — you need to cite 20–30 existing chest X-ray AI papers and explain what your work adds
-2. **Ablation study** — show each model's individual contribution to the ensemble (this is actually already easy with your pipeline)
-3. **Statistical significance** — confidence intervals on your MCC, not just a point estimate
-4. **Radiologist validation** — ideally one radiologist reviews a sample of predictions. This is where your Kaiser access is a huge advantage
-5. **Limitations section** — distribution shift (Vietnamese hospital data), class consolidation, no external validation set
-
----
 
 
