@@ -31,7 +31,7 @@ from dataset import (
 from train_timm import build_timm_model
 from train_vit  import ViTClassifier
 from train_catboost import FEATURE_NAMES, MODEL_NAMES
-from utils import get_device, set_seed, load_checkpoint
+from utils import get_device, set_seed, load_checkpoint, find_best_threshold, compute_metrics
 
 
 #  Single-model inference 
@@ -97,26 +97,29 @@ def load_all_models(device: torch.device) -> dict:
     return models
 
 
-#  Assemble test feature matrix 
+#  Assemble test feature matrix
 
 def build_test_features(test_df: pd.DataFrame,
                         models: dict,
-                        device: torch.device) -> np.ndarray:
+                        device: torch.device) -> tuple[np.ndarray, dict]:
     """
     Run each vision model on the test set and assemble the feature matrix
     [prob_model1, …, prob_vit, patient_age, patient_sex].
 
     Returns
-    X_test : np.ndarray, shape (N_test, n_features)
+    X_test    : np.ndarray, shape (N_test, n_features)
+    prob_dict : dict { model_name: probs np.ndarray } for individual evaluation
     """
     test_loader = make_test_loader(test_df)
     prob_cols   = []
+    prob_dict   = {}
 
     for model_name in MODEL_NAMES:
         print(f"  Predicting with {model_name}…")
         model = models[model_name]
         probs = predict_probs(model, test_loader, device)
         prob_cols.append(probs)
+        prob_dict[model_name] = probs
         print(f"    → {len(probs)} predictions, "
               f"mean prob={probs.mean():.4f}")
 
@@ -128,7 +131,44 @@ def build_test_features(test_df: pd.DataFrame,
 
     X_test = np.column_stack(prob_cols + [age, sex])
     print(f"  Test feature matrix: {X_test.shape}")
-    return X_test
+    return X_test, prob_dict
+
+
+#  Individual baseline model evaluation
+
+def evaluate_individual_models(prob_dict: dict,
+                                y_true: np.ndarray) -> pd.DataFrame:
+    """
+    For each vision model, find the MCC-optimal threshold on the test set
+    and compute full metrics. Prints a summary table for the paper.
+
+    Returns
+    results_df : DataFrame with one row per model
+    """
+    print("\n" + "="*60)
+    print("  Individual Model Performance on Test Set")
+    print("="*60)
+
+    rows = []
+    for model_name, probs in prob_dict.items():
+        thresh, mcc = find_best_threshold(y_true, probs)
+        preds = (probs >= thresh).astype(int)
+        metrics = compute_metrics(y_true, preds, probs,
+                                  threshold_label=f"{model_name} (MCC-optimal)")
+        rows.append({
+            "model":     model_name,
+            "test_mcc":  round(metrics["mcc"], 4),
+            "roc_auc":   round(metrics["roc_auc"], 4),
+            "pr_auc":    round(metrics["pr_auc"], 4),
+            "threshold": round(thresh, 4),
+        })
+
+    results_df = pd.DataFrame(rows)
+    print("\n  Summary — Individual Models vs Stacked Ensemble")
+    print("  " + "-"*52)
+    print(results_df.to_string(index=False))
+    print("  " + "-"*52)
+    return results_df
 
 
 #  Final prediction 
@@ -183,33 +223,64 @@ def main():
     print("\n  Loading vision model checkpoints…")
     models   = load_all_models(device)
 
-    # Build feature matrix
+    # Build feature matrix + collect per-model probabilities
     print("\n  Running inference on test images…")
-    X_test   = build_test_features(test_df, models, device)
+    X_test, prob_dict = build_test_features(test_df, models, device)
+
+    # Ground-truth labels for the test set
+    y_true = test_df["binary_label"].values.astype(int)
+
+    # Evaluate each individual model on the test set (baseline MCCs for paper)
+    baseline_df = evaluate_individual_models(prob_dict, y_true)
 
     # CatBoost final prediction
     print("\n  Running CatBoost meta-learner…")
-    probs, preds = run_catboost_inference(X_test)
+    cb_probs, preds = run_catboost_inference(X_test)
+
+    # Stacked ensemble metrics
+    thresh_path = os.path.join(SAVE_DIR, "catboost_threshold.npy")
+    cb_threshold = float(np.load(thresh_path)[0])
+    print("\n  Stacked Ensemble — Test Set Metrics:")
+    stack_metrics = compute_metrics(y_true, preds, cb_probs,
+                                    threshold_label=f"CatBoost stack (MCC-optimal {cb_threshold:.3f})")
+
+    # Final comparison table
+    print("\n" + "="*60)
+    print("  PAPER RESULTS — Test Set MCC Comparison")
+    print("="*60)
+    for _, row in baseline_df.iterrows():
+        print(f"  {row['model']:<40} MCC = {row['test_mcc']:.4f}")
+    print(f"  {'Stacked Ensemble (CatBoost)':<40} MCC = {stack_metrics['mcc']:.4f}")
+    print("="*60)
+
+    # Save results table to CSV
+    timestamp    = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+    results_path = os.path.join(SUBMIT_DIR, f"model_comparison_{timestamp}.csv")
+    stack_row    = pd.DataFrame([{
+        "model":     "stacked_ensemble",
+        "test_mcc":  round(stack_metrics["mcc"], 4),
+        "roc_auc":   round(stack_metrics["roc_auc"], 4),
+        "pr_auc":    round(stack_metrics["pr_auc"], 4),
+        "threshold": round(cb_threshold, 4),
+    }])
+    pd.concat([baseline_df, stack_row], ignore_index=True).to_csv(results_path, index=False)
+    print(f"\n  Results table saved → {results_path}")
 
     # Submission DataFrame
     submit = pd.DataFrame({
         "id":      test_df["image_id"].values,
         "Outcome": preds,
     })
-
-    # Optional: include probability column for inspection
     submit_with_prob = submit.copy()
-    submit_with_prob["pred_prob"] = probs
+    submit_with_prob["pred_prob"] = cb_probs
 
-    timestamp    = datetime.now().strftime("%Y-%m-%d_%H%M%S")
-    submit_path  = os.path.join(SUBMIT_DIR, f"submit_{timestamp}.csv")
-    debug_path   = os.path.join(SUBMIT_DIR, f"submit_{timestamp}_with_probs.csv")
-
+    submit_path = os.path.join(SUBMIT_DIR, f"submit_{timestamp}.csv")
+    debug_path  = os.path.join(SUBMIT_DIR, f"submit_{timestamp}_with_probs.csv")
     submit.to_csv(submit_path, index=False)
     submit_with_prob.to_csv(debug_path, index=False)
 
-    print(f"\n  Submission saved  → {submit_path}")
-    print(f"  Debug copy saved  → {debug_path}")
+    print(f"  Submission saved    → {submit_path}")
+    print(f"  Debug copy saved    → {debug_path}")
     print(f"\n  Class distribution:")
     print(submit["Outcome"].value_counts().to_string())
     print("\n" + "="*60)
