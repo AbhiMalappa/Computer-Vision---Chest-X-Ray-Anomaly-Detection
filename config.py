@@ -26,9 +26,16 @@ DATA_DIR        = _find_data_dir()
 IMAGES_DIR      = os.path.join(DATA_DIR, "images")          # local flat structure
 DATA_ENTRY_CSV  = os.path.join(DATA_DIR, "Data_Entry_2017.csv")
 
-SAVE_DIR        = "./saved_models"
-OOF_DIR         = "./oof_predictions"
-SUBMIT_DIR      = "./submissions"
+# On Kaggle, save to /kaggle/working/ so outputs persist as notebook output.
+# Locally, save relative to the working directory.
+if os.path.exists("/kaggle/working"):
+    SAVE_DIR   = "/kaggle/working/saved_models"
+    OOF_DIR    = "/kaggle/working/oof_predictions"
+    SUBMIT_DIR = "/kaggle/working/submissions"
+else:
+    SAVE_DIR   = "./saved_models"
+    OOF_DIR    = "./oof_predictions"
+    SUBMIT_DIR = "./submissions"
 
 os.makedirs(SAVE_DIR,   exist_ok=True)
 os.makedirs(OOF_DIR,    exist_ok=True)
