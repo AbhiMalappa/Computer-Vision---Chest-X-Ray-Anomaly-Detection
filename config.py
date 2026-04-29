@@ -99,7 +99,7 @@ TIMM_MODELS = [
 # ─── ViT (HuggingFace) ────────────────────────────────────────────────────────
 VIT_MODEL_NAME    = "google/vit-base-patch16-224-in21k"
 VIT_LEARNING_RATE = 5e-5
-SKIP_VIT          = False  # set to True to skip ViT (e.g. local CPU testing)
+SKIP_VIT          = True   # ViT OOF not available; using 5-model stack
 
 # ─── CatBoost ─────────────────────────────────────────────────────────────────
 CATBOOST_PARAMS = {
