@@ -31,7 +31,7 @@ from dataset import (
 from train_timm import build_timm_model
 from train_vit  import ViTClassifier
 from train_catboost import FEATURE_NAMES, MODEL_NAMES
-from utils import get_device, set_seed, load_checkpoint, find_best_threshold, compute_metrics
+from utils import get_device, set_seed, load_checkpoint, find_best_threshold, compute_metrics, plot_roc_pr
 
 
 #  Single-model inference 
@@ -156,11 +156,14 @@ def evaluate_individual_models(prob_dict: dict,
         metrics = compute_metrics(y_true, preds, probs,
                                   threshold_label=f"{model_name} (MCC-optimal)")
         rows.append({
-            "model":     model_name,
-            "test_mcc":  round(metrics["mcc"], 4),
-            "roc_auc":   round(metrics["roc_auc"], 4),
-            "pr_auc":    round(metrics["pr_auc"], 4),
-            "threshold": round(thresh, 4),
+            "model":           model_name,
+            "test_mcc":        round(metrics["mcc"], 4),
+            "roc_auc":         round(metrics["roc_auc"], 4),
+            "pr_auc":          round(metrics["pr_auc"], 4),
+            "accuracy":        round(metrics["accuracy"], 4),
+            "recall_positive": round(metrics["recall_positive"], 4),
+            "recall_macro":    round(metrics["recall_macro"], 4),
+            "threshold":       round(thresh, 4),
         })
 
     results_df = pd.DataFrame(rows)
@@ -244,6 +247,11 @@ def main():
     stack_metrics = compute_metrics(y_true, preds, cb_probs,
                                     threshold_label=f"CatBoost stack (MCC-optimal {cb_threshold:.3f})")
 
+    # ROC/PR plot for stacked ensemble
+    plot_roc_pr(y_true, cb_probs,
+                title_suffix="Stacked Ensemble (Test Set)",
+                save_path=os.path.join(SUBMIT_DIR, f"ensemble_roc_pr_{timestamp}.png"))
+
     # Final comparison table
     print("\n" + "="*60)
     print("  PAPER RESULTS — Test Set MCC Comparison")
@@ -257,11 +265,14 @@ def main():
     timestamp    = datetime.now().strftime("%Y-%m-%d_%H%M%S")
     results_path = os.path.join(SUBMIT_DIR, f"model_comparison_{timestamp}.csv")
     stack_row    = pd.DataFrame([{
-        "model":     "stacked_ensemble",
-        "test_mcc":  round(stack_metrics["mcc"], 4),
-        "roc_auc":   round(stack_metrics["roc_auc"], 4),
-        "pr_auc":    round(stack_metrics["pr_auc"], 4),
-        "threshold": round(cb_threshold, 4),
+        "model":           "stacked_ensemble",
+        "test_mcc":        round(stack_metrics["mcc"], 4),
+        "roc_auc":         round(stack_metrics["roc_auc"], 4),
+        "pr_auc":          round(stack_metrics["pr_auc"], 4),
+        "accuracy":        round(stack_metrics["accuracy"], 4),
+        "recall_positive": round(stack_metrics["recall_positive"], 4),
+        "recall_macro":    round(stack_metrics["recall_macro"], 4),
+        "threshold":       round(cb_threshold, 4),
     }])
     pd.concat([baseline_df, stack_row], ignore_index=True).to_csv(results_path, index=False)
     print(f"\n  Results table saved → {results_path}")
