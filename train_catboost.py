@@ -233,6 +233,17 @@ def main():
     print(f"  CV MCC (OOF, {N_FOLDS}-fold): {mean_mcc:.4f} ± {std_mcc:.4f}")
     print(f"  Final OOF MCC:               {best_mcc:.4f}")
 
+    # 8. Save metrics summary to CSV
+    metrics_path = os.path.join(SAVE_DIR, "catboost_oof_metrics.csv")
+    metrics_df = pd.DataFrame([{
+        "cv_mcc_mean":   round(mean_mcc, 4),
+        "cv_mcc_std":    round(std_mcc, 4),
+        "oof_mcc":       round(best_mcc, 4),
+        "oof_threshold": round(best_thresh, 4),
+    }])
+    metrics_df.to_csv(metrics_path, index=False)
+    print(f"  Metrics saved       → {metrics_path}")
+
 
 if __name__ == "__main__":
     main()
