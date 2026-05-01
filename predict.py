@@ -231,7 +231,8 @@ def main():
     X_test, prob_dict = build_test_features(test_df, models, device)
 
     # Ground-truth labels for the test set
-    y_true = test_df["binary_label"].values.astype(int)
+    y_true    = test_df["binary_label"].values.astype(int)
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
 
     # Evaluate each individual model on the test set (baseline MCCs for paper)
     baseline_df = evaluate_individual_models(prob_dict, y_true)
@@ -262,7 +263,6 @@ def main():
     print("="*60)
 
     # Save results table to CSV
-    timestamp    = datetime.now().strftime("%Y-%m-%d_%H%M%S")
     results_path = os.path.join(SUBMIT_DIR, f"model_comparison_{timestamp}.csv")
     stack_row    = pd.DataFrame([{
         "model":           "stacked_ensemble",
