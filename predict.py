@@ -321,9 +321,15 @@ def main():
     cb_probs, preds = run_catboost_inference(X_test)
 
     # Stacked ensemble metrics
-    thresh_path = os.path.join(SAVE_DIR, "catboost_threshold.npy")
+    thresh_path  = os.path.join(SAVE_DIR, "catboost_threshold.npy")
     cb_threshold = float(np.load(thresh_path)[0])
-    print("\n  Stacked Ensemble — Test Set Metrics:")
+
+    print("\n  Stacked Ensemble — Test Set Metrics (0.5 threshold):")
+    preds_05      = (cb_probs >= 0.5).astype(int)
+    stack_metrics_05 = compute_metrics(y_true, preds_05, cb_probs,
+                                       threshold_label="CatBoost stack (0.5 threshold)")
+
+    print("\n  Stacked Ensemble — Test Set Metrics (MCC-optimal threshold):")
     stack_metrics = compute_metrics(y_true, preds, cb_probs,
                                     threshold_label=f"CatBoost stack (MCC-optimal {cb_threshold:.3f})")
 
@@ -358,6 +364,31 @@ def main():
     }])
     pd.concat([baseline_df, stack_row], ignore_index=True).to_csv(results_path, index=False)
     print(f"\n  Results table saved → {results_path}")
+
+    # Table VI — confusion matrix at 0.5 vs MCC-optimal threshold
+    cm_05  = stack_metrics_05["confusion_matrix"]
+    cm_opt = stack_metrics["confusion_matrix"]
+    cm_comparison = pd.DataFrame([
+        {
+            "threshold":  "0.5 (default)",
+            "TN": int(cm_05[0, 0]),  "FP": int(cm_05[0, 1]),
+            "FN": int(cm_05[1, 0]),  "TP": int(cm_05[1, 1]),
+            "accuracy":   round(stack_metrics_05["accuracy"], 4),
+            "recall_pos": round(stack_metrics_05["recall_positive"], 4),
+            "mcc":        round(stack_metrics_05["mcc"], 4),
+        },
+        {
+            "threshold":  f"MCC-optimal ({cb_threshold:.3f})",
+            "TN": int(cm_opt[0, 0]),  "FP": int(cm_opt[0, 1]),
+            "FN": int(cm_opt[1, 0]),  "TP": int(cm_opt[1, 1]),
+            "accuracy":   round(stack_metrics["accuracy"], 4),
+            "recall_pos": round(stack_metrics["recall_positive"], 4),
+            "mcc":        round(stack_metrics["mcc"], 4),
+        },
+    ])
+    cm_path = os.path.join(SUBMIT_DIR, f"table6_confusion_matrix_comparison_{timestamp}.csv")
+    cm_comparison.to_csv(cm_path, index=False)
+    print(f"  Table VI saved      → {cm_path}")
 
     # Submission DataFrame
     submit = pd.DataFrame({
