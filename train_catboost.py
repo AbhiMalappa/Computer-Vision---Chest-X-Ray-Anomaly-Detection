@@ -211,15 +211,37 @@ def main():
     prob_feature_names  = [f"prob_{m}" for m in MODEL_NAMES]
 
     if args.ablation:
-        # ── Ablation: two configurations ──────────────────────────────────
-        configs = [
-            (X_probs, prob_feature_names,  "Models only (no metadata)"),
-            (X_full,  FEATURE_NAMES,       "Models + metadata (age, sex)"),
-        ]
+        # ── Ablation: three configurations ────────────────────────────────
         rows = []
-        for X, feat_names, label in configs:
-            result = run_configuration(X, y, feat_names, label)
-            rows.append({k: v for k, v in result.items() if not k.startswith("_")})
+
+        # 1. Simple average ensemble (no CatBoost)
+        print(f"\n{'='*60}")
+        print(f"  Configuration: Simple average (no CatBoost)")
+        print(f"{'='*60}")
+        avg_probs = X_probs.mean(axis=1)
+        avg_thresh, avg_mcc = find_best_threshold(y, avg_probs, n_points=THRESHOLD_GRID_SIZE)
+        avg_preds   = (avg_probs >= avg_thresh).astype(int)
+        avg_metrics = compute_metrics(y, avg_preds, avg_probs,
+                                      threshold_label=f"Simple average (thresh={avg_thresh:.3f})")
+        rows.append({
+            "configuration": "Simple average (no CatBoost)",
+            "cv_mcc_mean":   "N/A",
+            "cv_mcc_std":    "N/A",
+            "oof_mcc":       round(avg_mcc, 4),
+            "roc_auc":       round(avg_metrics["roc_auc"], 4),
+            "pr_auc":        round(avg_metrics["pr_auc"], 4),
+            "accuracy":      round(avg_metrics["accuracy"], 4),
+            "recall_pos":    round(avg_metrics["recall_positive"], 4),
+            "threshold":     round(avg_thresh, 4),
+        })
+
+        # 2. CatBoost — models only (no metadata)
+        result = run_configuration(X_probs, y, prob_feature_names, "CatBoost — models only (no metadata)")
+        rows.append({k: v for k, v in result.items() if not k.startswith("_")})
+
+        # 3. CatBoost — models + metadata (full stack)
+        full_result = run_configuration(X_full, y, FEATURE_NAMES, "CatBoost — models + metadata (age, sex)")
+        rows.append({k: v for k, v in full_result.items() if not k.startswith("_")})
 
         ablation_df = pd.DataFrame(rows)
         ablation_path = os.path.join(SAVE_DIR, "ablation_results.csv")
@@ -231,10 +253,7 @@ def main():
         print(ablation_df.to_string(index=False))
         print(f"\n  Ablation table saved → {ablation_path}")
 
-        # Save the full model (models + metadata) as the production model
-        full_result = [r for r in [run_configuration(X_full, y, FEATURE_NAMES,
-                       "Models + metadata (age, sex)")] if True][0]
-        model      = full_result["_model"]
+        model       = full_result["_model"]
         best_thresh = full_result["_thresh"]
 
     else:
