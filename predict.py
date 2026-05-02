@@ -362,11 +362,62 @@ def main():
     plot_mcc_vs_threshold(cb_probs, y_true, cb_threshold,
                           save_path=os.path.join(SUBMIT_DIR, f"fig4_mcc_vs_threshold_{timestamp}.png"))
 
+    # Ablation evaluations on test set
+    ablation_rows = []
+
+    # Ablation 4 — Simple average
+    avg_thresh_path = os.path.join(SAVE_DIR, "catboost_threshold_avg.npy")
+    if os.path.exists(avg_thresh_path):
+        print("\n  Ablation 4 — Simple average (test set):")
+        avg_thresh    = float(np.load(avg_thresh_path)[0])
+        avg_probs     = np.stack(list(prob_dict.values())).mean(axis=0)
+        avg_preds     = (avg_probs >= avg_thresh).astype(int)
+        avg_metrics   = compute_metrics(y_true, avg_preds, avg_probs,
+                                        threshold_label=f"Simple average (thresh={avg_thresh:.3f})")
+        ablation_rows.append({
+            "model":           "simple_average",
+            "test_mcc":        round(avg_metrics["mcc"], 4),
+            "roc_auc":         round(avg_metrics["roc_auc"], 4),
+            "pr_auc":          round(avg_metrics["pr_auc"], 4),
+            "accuracy":        round(avg_metrics["accuracy"], 4),
+            "recall_positive": round(avg_metrics["recall_positive"], 4),
+            "recall_macro":    round(avg_metrics["recall_macro"], 4),
+            "threshold":       round(avg_thresh, 4),
+        })
+
+    # Ablation 3 — CatBoost no metadata
+    no_meta_model_path  = os.path.join(SAVE_DIR, "catboost_model_no_meta.cbm")
+    no_meta_thresh_path = os.path.join(SAVE_DIR, "catboost_threshold_no_meta.npy")
+    if os.path.exists(no_meta_model_path) and os.path.exists(no_meta_thresh_path):
+        print("\n  Ablation 3 — CatBoost no metadata (test set):")
+        no_meta_model  = CatBoostClassifier()
+        no_meta_model.load_model(no_meta_model_path)
+        no_meta_thresh = float(np.load(no_meta_thresh_path)[0])
+        prob_feat_names = [f"prob_{m}" for m in MODEL_NAMES]
+        X_test_no_meta  = np.column_stack(list(prob_dict.values()))
+        no_meta_pool    = Pool(X_test_no_meta, feature_names=prob_feat_names)
+        no_meta_probs   = no_meta_model.predict_proba(no_meta_pool)[:, 1]
+        no_meta_preds   = (no_meta_probs >= no_meta_thresh).astype(int)
+        no_meta_metrics = compute_metrics(y_true, no_meta_preds, no_meta_probs,
+                                          threshold_label=f"CatBoost no-meta (thresh={no_meta_thresh:.3f})")
+        ablation_rows.append({
+            "model":           "catboost_no_metadata",
+            "test_mcc":        round(no_meta_metrics["mcc"], 4),
+            "roc_auc":         round(no_meta_metrics["roc_auc"], 4),
+            "pr_auc":          round(no_meta_metrics["pr_auc"], 4),
+            "accuracy":        round(no_meta_metrics["accuracy"], 4),
+            "recall_positive": round(no_meta_metrics["recall_positive"], 4),
+            "recall_macro":    round(no_meta_metrics["recall_macro"], 4),
+            "threshold":       round(no_meta_thresh, 4),
+        })
+
     # Final comparison table
     print("\n" + "="*60)
     print("  PAPER RESULTS — Test Set MCC Comparison")
     print("="*60)
     for _, row in baseline_df.iterrows():
+        print(f"  {row['model']:<40} MCC = {row['test_mcc']:.4f}")
+    for row in ablation_rows:
         print(f"  {row['model']:<40} MCC = {row['test_mcc']:.4f}")
     print(f"  {'Stacked Ensemble (CatBoost)':<40} MCC = {stack_metrics['mcc']:.4f}")
     print("="*60)
@@ -383,7 +434,8 @@ def main():
         "recall_macro":    round(stack_metrics["recall_macro"], 4),
         "threshold":       round(cb_threshold, 4),
     }])
-    pd.concat([baseline_df, stack_row], ignore_index=True).to_csv(results_path, index=False)
+    ablation_df = pd.DataFrame(ablation_rows) if ablation_rows else pd.DataFrame()
+    pd.concat([baseline_df, ablation_df, stack_row], ignore_index=True).to_csv(results_path, index=False)
     print(f"\n  Results table saved → {results_path}")
 
     # Table VI — confusion matrix at 0.5 vs MCC-optimal threshold

@@ -223,6 +223,9 @@ def main():
         avg_preds   = (avg_probs >= avg_thresh).astype(int)
         avg_metrics = compute_metrics(y, avg_preds, avg_probs,
                                       threshold_label=f"Simple average (thresh={avg_thresh:.3f})")
+        # Save avg threshold for predict.py to use on test set
+        np.save(os.path.join(SAVE_DIR, "catboost_threshold_avg.npy"), np.array([avg_thresh]))
+        print(f"  Avg threshold saved → {os.path.join(SAVE_DIR, 'catboost_threshold_avg.npy')}")
         rows.append({
             "configuration": "Simple average (no CatBoost)",
             "cv_mcc_mean":   "N/A",
@@ -236,8 +239,14 @@ def main():
         })
 
         # 2. CatBoost — models only (no metadata)
-        result = run_configuration(X_probs, y, prob_feature_names, "CatBoost — models only (no metadata)")
-        rows.append({k: v for k, v in result.items() if not k.startswith("_")})
+        no_meta_result = run_configuration(X_probs, y, prob_feature_names,
+                                           "CatBoost — models only (no metadata)")
+        # Save no-metadata model + threshold for predict.py to use on test set
+        no_meta_result["_model"].save_model(os.path.join(SAVE_DIR, "catboost_model_no_meta.cbm"))
+        np.save(os.path.join(SAVE_DIR, "catboost_threshold_no_meta.npy"),
+                np.array([no_meta_result["_thresh"]]))
+        print(f"  No-meta model saved → {os.path.join(SAVE_DIR, 'catboost_model_no_meta.cbm')}")
+        rows.append({k: v for k, v in no_meta_result.items() if not k.startswith("_")})
 
         # 3. CatBoost — models + metadata (full stack)
         full_result = run_configuration(X_full, y, FEATURE_NAMES, "CatBoost — models + metadata (age, sex)")
