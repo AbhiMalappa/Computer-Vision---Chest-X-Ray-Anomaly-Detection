@@ -18,6 +18,10 @@ import numpy as np
 import pandas as pd
 import torch
 import timm
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+from sklearn.metrics import roc_curve, auc, precision_recall_curve
 from catboost import CatBoostClassifier, Pool
 
 from config import (
@@ -207,7 +211,82 @@ def run_catboost_inference(X_test: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     return probs, preds
 
 
-# Entry point 
+#  Paper figures
+
+def plot_roc_all_models(prob_dict: dict,
+                        cb_probs: np.ndarray,
+                        y_true: np.ndarray,
+                        save_path: str) -> None:
+    """Fig 2 — ROC curve for each model + stacked ensemble on test set."""
+    fig, ax = plt.subplots(figsize=(8, 7))
+    for model_name, probs in prob_dict.items():
+        fpr, tpr, _ = roc_curve(y_true, probs)
+        roc_auc = auc(fpr, tpr)
+        ax.plot(fpr, tpr, lw=1.5, label=f"{model_name} (AUC={roc_auc:.3f})")
+    fpr, tpr, _ = roc_curve(y_true, cb_probs)
+    roc_auc = auc(fpr, tpr)
+    ax.plot(fpr, tpr, lw=2.5, linestyle="--", color="black",
+            label=f"Stacked Ensemble (AUC={roc_auc:.3f})")
+    ax.plot([0, 1], [0, 1], color="grey", lw=1, linestyle=":")
+    ax.set(xlim=[0, 1], ylim=[0, 1.02],
+           xlabel="False Positive Rate", ylabel="True Positive Rate",
+           title="ROC Curves — Test Set")
+    ax.legend(loc="lower right", fontsize=8)
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=150, bbox_inches="tight")
+    print(f"  Fig 2 saved → {save_path}")
+    plt.close()
+
+
+def plot_pr_all_models(prob_dict: dict,
+                       cb_probs: np.ndarray,
+                       y_true: np.ndarray,
+                       save_path: str) -> None:
+    """Fig 3 — PR curve for each model + stacked ensemble on test set."""
+    prevalence = y_true.mean()
+    fig, ax = plt.subplots(figsize=(8, 7))
+    for model_name, probs in prob_dict.items():
+        prec, rec, _ = precision_recall_curve(y_true, probs)
+        pr_auc = auc(rec, prec)
+        ax.plot(rec, prec, lw=1.5, label=f"{model_name} (AUC={pr_auc:.3f})")
+    prec, rec, _ = precision_recall_curve(y_true, cb_probs)
+    pr_auc = auc(rec, prec)
+    ax.plot(rec, prec, lw=2.5, linestyle="--", color="black",
+            label=f"Stacked Ensemble (AUC={pr_auc:.3f})")
+    ax.axhline(prevalence, color="grey", lw=1, linestyle=":", label="Chance")
+    ax.set(xlim=[0, 1], ylim=[0, 1.02],
+           xlabel="Recall", ylabel="Precision",
+           title="Precision-Recall Curves — Test Set")
+    ax.legend(loc="upper right", fontsize=8)
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=150, bbox_inches="tight")
+    print(f"  Fig 3 saved → {save_path}")
+    plt.close()
+
+
+def plot_mcc_vs_threshold(cb_probs: np.ndarray,
+                          y_true: np.ndarray,
+                          best_thresh: float,
+                          save_path: str) -> None:
+    """Fig 4 — MCC vs threshold curve for stacked ensemble on test set."""
+    from sklearn.metrics import matthews_corrcoef
+    thresholds = np.linspace(0.01, 0.99, 200)
+    mccs = [matthews_corrcoef(y_true, (cb_probs >= t).astype(int))
+            for t in thresholds]
+    fig, ax = plt.subplots(figsize=(8, 5))
+    ax.plot(thresholds, mccs, lw=2, color="steelblue", label="MCC")
+    ax.axvline(best_thresh, color="red", linestyle="--",
+               label=f"Optimal threshold = {best_thresh:.3f}")
+    ax.set(xlabel="Threshold", ylabel="MCC",
+           title="MCC vs Threshold — Stacked Ensemble (Test Set)")
+    ax.legend()
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=150, bbox_inches="tight")
+    print(f"  Fig 4 saved → {save_path}")
+    plt.close()
+
+
+# Entry point
 
 def main():
     print("\n" + "="*60)
@@ -248,10 +327,13 @@ def main():
     stack_metrics = compute_metrics(y_true, preds, cb_probs,
                                     threshold_label=f"CatBoost stack (MCC-optimal {cb_threshold:.3f})")
 
-    # ROC/PR plot for stacked ensemble
-    plot_roc_pr(y_true, cb_probs,
-                title_suffix="Stacked Ensemble (Test Set)",
-                save_path=os.path.join(SUBMIT_DIR, f"ensemble_roc_pr_{timestamp}.png"))
+    # Paper figures
+    plot_roc_all_models(prob_dict, cb_probs, y_true,
+                        save_path=os.path.join(SUBMIT_DIR, f"fig2_roc_all_models_{timestamp}.png"))
+    plot_pr_all_models(prob_dict, cb_probs, y_true,
+                       save_path=os.path.join(SUBMIT_DIR, f"fig3_pr_all_models_{timestamp}.png"))
+    plot_mcc_vs_threshold(cb_probs, y_true, cb_threshold,
+                          save_path=os.path.join(SUBMIT_DIR, f"fig4_mcc_vs_threshold_{timestamp}.png"))
 
     # Final comparison table
     print("\n" + "="*60)
