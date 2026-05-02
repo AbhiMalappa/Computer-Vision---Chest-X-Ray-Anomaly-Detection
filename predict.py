@@ -333,6 +333,27 @@ def main():
     stack_metrics = compute_metrics(y_true, preds, cb_probs,
                                     threshold_label=f"CatBoost stack (MCC-optimal {cb_threshold:.3f})")
 
+    # Per-pathology breakdown
+    print("\n" + "="*60)
+    print("  Per-Pathology Detection Breakdown")
+    print("="*60)
+    test_df_copy = test_df.copy()
+    test_df_copy["pred"] = preds
+    rows_path = []
+    for label in sorted(test_df_copy["finding_labels"].str.split("|").explode().unique()):
+        mask  = test_df_copy["finding_labels"].str.contains(label, regex=False)
+        group = test_df_copy[mask]
+        n     = len(group)
+        detected = int(group["pred"].sum())
+        pct   = detected / n * 100 if n > 0 else 0.0
+        rows_path.append({"disease": label, "n_test_images": n,
+                          "detected": detected, "detected_pct": round(pct, 1)})
+        print(f"  {label:<30} n={n:5d}   detected={detected:5d}  ({pct:.1f}%)")
+    pathology_df = pd.DataFrame(rows_path).sort_values("detected_pct", ascending=False)
+    pathology_path = os.path.join(SUBMIT_DIR, f"per_pathology_breakdown_{timestamp}.csv")
+    pathology_df.to_csv(pathology_path, index=False)
+    print(f"\n  Per-pathology table saved → {pathology_path}")
+
     # Paper figures
     plot_roc_all_models(prob_dict, cb_probs, y_true,
                         save_path=os.path.join(SUBMIT_DIR, f"fig2_roc_all_models_{timestamp}.png"))
